@@ -1,0 +1,129 @@
+import numpy as np
+import pandas as pd
+
+def find_arbitrage_opportunity(exchange_rates, currencies, buy_fees, sell_fees, start_currency):
+    unique_currencies = set()
+    # Iterate through the exchange_rates dictionary
+    for source_currency, rates in exchange_rates.items():
+        # Add the source currency to the set
+        unique_currencies.add(source_currency)
+        # Iterate through the target currencies in the rates dictionary
+        for target_currency in rates.keys():
+            # Add the target currency to the set
+            unique_currencies.add(target_currency)
+    # Convert the set to a sorted list of unique currencies
+    currencies = sorted(list(unique_currencies))
+
+    n_currencies = len(currencies)
+    currency_index = {currency: i for i, currency in enumerate(currencies)}
+    exchange_rates_with_fees = np.zeros((n_currencies, n_currencies))
+    np.fill_diagonal(exchange_rates_with_fees, 1)
+    
+    
+    for i in range(n_currencies):
+        for j in range(i + 1, n_currencies):
+            buy_fee = buy_fees[currencies[i]]
+            sell_fee = sell_fees[currencies[j]]
+            exchange_rate = exchange_rates.get(currencies[i], {}).get(currencies[j], None)
+            if exchange_rate is not None:
+                exchange_rates_with_fees[i][j] = -np.log((1 - buy_fee) * exchange_rate * (1 + sell_fee))
+                exchange_rates_with_fees[j][i] = 1/exchange_rates_with_fees[i][j]
+            else:
+                reverse_rate = exchange_rates.get(currencies[j], {}).get(currencies[i], None)
+                if reverse_rate is not None:
+                    exchange_rates_with_fees[j][i] = -np.log((1 - sell_fee) * reverse_rate * (1 + buy_fee))
+                    exchange_rates_with_fees[i][j] = 1 / exchange_rates_with_fees[j][i]
+
+    distances = np.full(len(currencies),np.inf)
+    predecessors = [-1] * len(currencies)
+    start_index = currency_index[start_currency]
+    distances[start_index] = 0.0
+
+    # Run Bellman-Ford algorithm with negative logarithmic exchange rates
+    for _ in range(len(currencies) - 1):
+        for source_curr in range(len(currencies)):
+            for dest_curr in range(len(currencies)):
+                if distances[dest_curr] > distances[source_curr] + exchange_rates_with_fees[source_curr][dest_curr]:
+                    distances[dest_curr] = distances[source_curr] + exchange_rates_with_fees[source_curr][dest_curr]
+                    predecessors[dest_curr] = source_curr
+
+
+    # Find cycles with negative weight
+    arbitrage_opportunities = []
+    for i in range(len(currencies)):
+        if i == start_index:
+            continue
+        if (distances[i] + exchange_rates_with_fees[i][start_index] < distances[start_index]):
+            for j in range(len(currencies)):
+                if j == start_index:
+                    continue
+                if (distances[j] + exchange_rates_with_fees[j][i] < distances[i]):
+                    cycle = []
+                    k = j
+                    while k not in cycle:
+                        cycle.append(k)
+                        k = predecessors[k]
+                    cycle.append(i)
+                    cycle = cycle[cycle.index(k):]  # remove nodes before the cycle starts
+                    cycle = cycle[::-1]  # reverse the order to get the cycle in the correct direction
+                    # if start_index in cycle:
+                    start_index_index = cycle.index(start_index)
+                    cycle = cycle[start_index_index:] + cycle[:start_index_index]
+                    cycle.append(start_index)
+                    if cycle not in arbitrage_opportunities:
+                        arbitrage_opportunities.append(cycle)
+
+    # Convert the indices in the cycles to currency names
+    for i in range(len(arbitrage_opportunities)):
+        arbitrage_opportunities[i] = [currencies[index] for index in arbitrage_opportunities[i]]
+    return arbitrage_opportunities
+
+
+
+def check_for_arbitrage(filename):
+    data = pd.read_csv(filename, index_col=0).dropna()
+
+    # Extract the unique currencies from the column names
+    currencies = []
+    for col in data.columns:
+        currency_pair = col.split('/')
+        currencies.append(currency_pair[0])
+        currencies.append(currency_pair[1])
+    currencies = list(set(currencies))
+
+    # Define the transaction fees for buying and selling each currency
+    buy_fees = {currency: 0.03 for currency in currencies}
+    sell_fees = {currency: 0.03 for currency in currencies}
+
+    # Create a list to store the arbitrage opportunities for each day
+    arbitrage_opportunities = []
+    # Define the base currency
+    base_currency = 'USD'
+
+    # Loop over each day in the data
+    for i in range(len(data)):
+        # Create a dictionary to store the exchange rates for this day
+        exchange_rates = {}
+        for currency1 in currencies:
+            exchange_rates[currency1] = {}
+            for currency2 in currencies:
+                if currency1 == currency2:
+                    exchange_rates[currency1][currency2] = 1.0
+                else:
+                    column_name = f"{currency1}/{currency2}"
+                    if column_name in data.columns:
+                        exchange_rates[currency1][currency2] = data[column_name].iloc[i]
+
+        # Check for arbitrage opportunities for this day
+        arbitrage_opportunity = find_arbitrage_opportunity(exchange_rates, currencies, buy_fees, sell_fees,
+                                                           base_currency)
+        # Add the arbitrage opportunity to the list
+        arbitrage_opportunities.append(arbitrage_opportunity)
+
+    for i in range(len(arbitrage_opportunities)):
+        if arbitrage_opportunities[i]:
+            print(f"Arbitrage opportunity found on day {i}: {arbitrage_opportunities[i]}")
+        else:
+            print(f"No arbitrage opportunity found on day {i}")
+check_for_arbitrage('/Users/yaelvilla/Downloads/TRY.csv')
+
